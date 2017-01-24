@@ -2,7 +2,7 @@
 
 Originally forked from <https://github.com/howdyai/botkit>
 
-Used the [botkit framework](https://github.com/howdyai/botkit) to create a [Slack](https://slack.com/) chat bot that can do what a Yelp chatbot like the Slack [Lunchbot](https://naaaaaaps.slack.com/apps/A1605411B-lunchbot) and also store your own ratings for a restaurant.
+Used the [botkit framework](https://github.com/howdyai/botkit) to create a [Slack](https://slack.com/) chat bot that can do what a Yelp chatbot like the Slack [Lunchbot](https://slack.com/apps/A1605411B-lunchbot) and also store your own ratings for a restaurant.
 
 ## Commands
 
