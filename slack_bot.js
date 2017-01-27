@@ -1,73 +1,22 @@
-/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-           ______     ______     ______   __  __     __     ______
-          /\  == \   /\  __ \   /\__  _\ /\ \/ /    /\ \   /\__  _\
-          \ \  __<   \ \ \/\ \  \/_/\ \/ \ \  _"-.  \ \ \  \/_/\ \/
-           \ \_____\  \ \_____\    \ \_\  \ \_\ \_\  \ \_\    \ \_\
-            \/_____/   \/_____/     \/_/   \/_/\/_/   \/_/     \/_/
+/*
+*
+* Lunchclub bot
+*/
 
+require('dotenv').config();
 
-This is a sample Slack bot built with Botkit.
-
-This bot demonstrates many of the core features of Botkit:
-
-* Connect to Slack using the real time API
-* Receive messages based on "spoken" patterns
-* Reply to messages
-* Use the conversation system to ask questions
-* Use the built in storage system to store and retrieve information
-  for a user.
-
-# RUN THE BOT:
-
-  Get a Bot token from Slack:
-
-    -> http://my.slack.com/services/new/bot
-
-  Run your bot from the command line:
-
-    token=<MY TOKEN> node slack_bot.js
-
-# USE THE BOT:
-
-  Find your bot inside Slack to send it a direct message.
-
-  Say: "Hello"
-
-  The bot will reply "Hello!"
-
-  Say: "who are you?"
-
-  The bot will tell you its name, where it is running, and for how long.
-
-  Say: "Call me <nickname>"
-
-  Tell the bot your nickname. Now you are friends.
-
-  Say: "who am I?"
-
-  The bot will tell you your nickname, if it knows one for you.
-
-  Say: "shutdown"
-
-  The bot will ask if you are sure, and then shut itself down.
-
-  Make sure to invite your bot into other channels using /invite @<my bot>!
-
-# EXTEND THE BOT:
-
-  Botkit has many features for building cool and useful bots!
-
-  Read all about it here:
-
-    -> http://howdy.ai/botkit
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-
-
-if (!process.env.token) {
-    console.log('Error: Specify token in environment');
+if (!process.env.SLACK_TOKEN) {
+    console.log('Error: Specify slack bot token in environment (e.g. SLACK_TOKEN=abc)');
     process.exit(1);
 }
+
+if (!process.env.MONGODB_URL) {
+    console.log('Error: Specify slack bot token in environment (e.g. MONGODB_URL=mongodb://user:password@test.com)');
+    process.exit(1);
+}
+
+// Mongo Storage
+var mongo_storage = require('./lib/storage/mongo_storage.js')({url: process.env.MONGODB_URL});
 
 var Botkit = require('./lib/Botkit.js');
 var os = require('os');
@@ -75,13 +24,24 @@ var Fuse = require('fuse.js');
 var _ = require('lodash');
 
 var controller = Botkit.slackbot({
-    json_file_store: 'lunchbotbrain',
-    debug: true,
+    // json_file_store: 'lunchbotbrain',
+    storage: mongo_storage,
+    // debug: true,
 });
 
 var bot = controller.spawn({
-    token: process.env.token
+    token: process.env.SLACK_TOKEN
 }).startRTM();
+
+
+// Blue bird
+var Promise = require("bluebird");
+
+// Promisify all storage methods
+_.forEach(controller.storage, entity => Promise.promisifyAll(entity));
+
+// Promisify bot methods
+Promise.promisifyAll(bot);
 
 function randResponse(responses) {
     return responses[_.random(responses.length-1)];
@@ -119,10 +79,14 @@ function sanitizeName(name) {
     return _.startCase(name.replace(/(&amp;)|&/g, "And"));
 }
 
+function fatalError(message, error, customMessage) {
+    console.error("*******Fatal Error******* " + customMessage + "\n", error);
+    bot.reply(message, ":face_with_head_bandage: *My brain exploded:* _" + customMessage + "_");
+}
+
 class Restaurant {
-  constructor(name, ratings) {
+  constructor(name) {
     this.name = name;
-    this.ratings = [];
   }
 }
 
@@ -135,7 +99,7 @@ const DEFAULT_FUSE_OPTIONS = {
 
 // Options to search by restaurant name
 var tempOptions = _.clone(DEFAULT_FUSE_OPTIONS);
-tempOptions.keys = ["name"];
+tempOptions.keys = ["restaurant.name"];
 const SEARCH_NAME_OPTIONS = tempOptions;
 
 
@@ -173,12 +137,7 @@ var askName = function(convo, callback) {
                 pattern: bot.utterances.yes,
                 callback: function(response, convo) {
                     var user = convo.vars[VAR_USER];
-                    user.name = name;
-                    controller.storage.users.save(user, function(err, id) {
-                        convo.setVar(VAR_USER, user);
-                        callback(convo);
-                        convo.next();
-                    });
+                    convo.next();
                 }
             },
             {
@@ -202,25 +161,33 @@ var askName = function(convo, callback) {
 
         convo.next();
     }, 
-    {},
+    {key: "username"},
     ASK_NAME); 
 };
 
-var askNameConvo = function(message, user, callback) {
-    bot.createConversation(message, function(err, convo) {
+var askNameConvo = function(message, user) {
+    return bot.createConversationAsync(message).then(convo => {
         var user = createUser(message, user);
         convo.setVar(VAR_USER, user);
 
-        askName(convo, callback);
+        askName(convo);
         convo.gotoThread(ASK_NAME);
 
-        convo.on("end", function (convo) {
-            if (convo.status === "stopped") {
-                bot.reply(message, "I didn't want to know your name anyway!");
-            }
+        var convoEndPromise = new Promise(function (resolve, reject) {
+            convo.on("end", function (convo) {
+                if (convo.status === "completed") {
+                    user.name = convo.extractResponse("username");
+                    resolve(controller.storage.users.saveAsync(user));
+                } else if (convo.status === "stopped") {
+                    bot.reply(message, "I didn't want to know your name anyway!");
+                    resolve(user);
+                }
+            });
         });
 
         convo.activate();
+
+        return convoEndPromise;
     });
 }
 
@@ -239,7 +206,7 @@ var newRestaurantSetup = function(convo) {
         {
             pattern: bot.utterances.yes,
             callback: function(response,convo) {
-                team.restaurants.push(new Restaurant(restaurant));
+                // Create document and save it to convo
                 convo.setVar(VAR_CHOSEN_RESTAURANT, newRestaurant);
                 rateRestaurantSetup(convo);
                 convo.gotoThread(RATE_RESTAURANT);
@@ -309,12 +276,12 @@ Start - CHOOSE_RESTAURANT
 var chooseRestaurantSetup = function(convo, yesThread, callback) {
 
     convo.addQuestion('Which one?', function(response, convo) {
-            var results = convo.vars[VAR_FUSE_RESULTS];
+            var restaurantNames = convo.vars[VAR_FUSE_RESULTS];
             var responseRestaurant = sanitizeName(response.text);
 
             if (response.text.match(/(stop)|(end)|(forget it)/i)) {
                 convo.stop();
-            } else if (_.find(results, ['item.name', responseRestaurant])) {
+            } else if (_.includes(restaurantNames, responseRestaurant)) {
                 convo.setVar(VAR_CHOSEN_RESTAURANT, responseRestaurant);
 
                 // Only call callback if it exists
@@ -345,33 +312,40 @@ var rateRestaurantSetup = function(convo) {
     var user = convo.vars[VAR_USER];
     var stars = convo.vars[VAR_STARS];
     var chosenRestaurantName = convo.vars[VAR_CHOSEN_RESTAURANT];
-    var restaurantToRate = _.find(user.restaurants, ['name', chosenRestaurantName]);
 
-    if (!restaurantToRate) {
-        convo.addMessage("You've never rated {{vars.chosenRestaurant}} before", RATE_RESTAURANT);
-        restaurantToRate = new Restaurant(convo.vars[VAR_CHOSEN_RESTAURANT]);
-        user.restaurants.push(restaurantToRate)
-        convo.addMessage(starString(stars) + ' for {{vars.chosenRestaurant}}. Now go out and run a lap, fat ass.', RATE_RESTAURANT);
-    } else if (restaurantToRate.ratings.length > 0) {
-        var lastRating = _.last(restaurantToRate.ratings);
+    controller.storage.restaurants.save(new Restaurant(chosenRestaurantName), function (err, savedRestaurant) {
+        controller.storage.restaurantRatings.getByUserId(user.id, function (err, allUserRatings) {
+           var restaurantRating = _.find(allUserRatings, ['restaurant.name', chosenRestaurantName]);
 
-        convo.addMessage('You last rated it: ' + starString(lastRating), RATE_RESTAURANT);
-        convo.addMessage(starString(stars) + ' for {{vars.chosenRestaurant}}. Aren\'t you getting a little chubby to be eating out?', RATE_RESTAURANT);
+            if (!restaurantRating) {
+                convo.addMessage("You've never rated {{vars.chosenRestaurant}} before", RATE_RESTAURANT);
+                convo.addMessage(starString(stars) + ' for {{vars.chosenRestaurant}}. Now go out and run a lap, fat ass.', RATE_RESTAURANT);
+                restaurantRating = {user: user._id, restaurant: savedRestaurant._id, ratings: []};
+            } else if (restaurantRating.ratings.length > 0) {
+                var lastRating = _.last(restaurantRating.ratings);
 
-        if (stars > lastRating) {
-            convo.addMessage('You feeling good about it huh? Did they give you free food?', RATE_RESTAURANT);
-        } else if (stars < lastRating) {
-            convo.addMessage('Did someone shit in your food?', RATE_RESTAURANT);
-        } else {
-            convo.addMessage('Same restaurant, same food, same rating, same job, same boring life. You\'re going nowhere. Admit it.', RATE_RESTAURANT);
-        }
-    }
+                convo.addMessage('You last rated it: ' + starString(lastRating), RATE_RESTAURANT);
+                convo.addMessage(starString(stars) + ' for {{vars.chosenRestaurant}}. Aren\'t you getting a little chubby to be eating out?', RATE_RESTAURANT);
 
-    restaurantToRate.ratings.push(stars);
+                if (stars > lastRating) {
+                    convo.addMessage('You feeling good about it huh? Did they give you free food?', RATE_RESTAURANT);
+                } else if (stars < lastRating) {
+                    convo.addMessage('Did someone shit in your food?', RATE_RESTAURANT);
+                } else {
+                    convo.addMessage('Same restaurant, same food, same rating, same job, same boring life. You\'re going nowhere. Admit it.', RATE_RESTAURANT);
+                }
+            }
 
-    controller.storage.teams.save(team, function(err, id) {
-        controller.storage.users.save(user, function(err, id) {
-            convo.next();
+            
+            restaurantRating.ratings.push(stars);
+
+            controller.storage.teams.save(team, function(err, savedTeam) {
+                controller.storage.users.save(user, function(err, savedUser) {
+                    controller.storage.restaurantRatings.save(restaurantRating, function (err, savedRating) {
+                        convo.next();
+                    })
+                });
+            });
         });
     });
 };
@@ -431,56 +405,57 @@ controller.hears('^tell (?:[a-z]+) (.+)','direct_message,direct_mention,mention'
 controller.hears('^my (.+) (?:(?:ratings?)|(?:stars))$','ambient,direct_message,direct_mention,mention', function(bot, message) {
     var restaurant = sanitizeName(message.match[1]);
 
-    controller.storage.users.get(message.user, function(err, user) {
-        bot.startConversation(message, function(err, convo) {
-            user = createUser(message, user);
+    var userPromise = controller.storage.users.getAsync(message.user);
+    var allUserRatingsPromise = userPromise.then(user => controller.storage.restaurantRatings.getByUserIdAsync(user.id));
+    var convoPromise = bot.startConversationAsync(message);
 
-            convo.setVar(VAR_CHOSEN_RESTAURANT, restaurant);
+    Promise.join(userPromise, allUserRatingsPromise, convoPromise, (user, allUserRatings, convo) => {
 
-            const NEVER_RATED = "never_rated";
-            const YOUR_RATING = "your_rating";
-            const VAR_LAST_RATING = "lastRating";
+        user = createUser(message, user);
+        convo.setVar(VAR_CHOSEN_RESTAURANT, restaurant);
 
-            convo.addMessage("You never rated {{vars.chosenRestaurant}}, genius.", NEVER_RATED);
-            convo.addMessage("Your last {{vars.chosenRestaurant}} rating was {{vars.lastRating}}", YOUR_RATING);
+        const NEVER_RATED = "never_rated";
+        const YOUR_RATING = "your_rating";
+        const VAR_LAST_RATING = "lastRating";
 
-            clarifyRestaurantSetup(convo, CHOOSE_RESTAURANT, NEVER_RATED);
-            chooseRestaurantSetup(convo, YOUR_RATING, function (convo) {
-                var chosenRestaurant = convo.vars[VAR_CHOSEN_RESTAURANT];
-                // console.log("======" + JSON.stringify(chosenRestaurant));
-                var restaurantObject = _.find(user.restaurants, ["name", chosenRestaurant]);
-                // console.log("======" + JSON.stringify(restaurantObject));
-                var lastRating =  _.last(restaurantObject.ratings);
-                convo.setVar(VAR_LAST_RATING, starString(lastRating));
-            });
+        convo.addMessage("You never rated {{vars.chosenRestaurant}}, genius.", NEVER_RATED);
+        convo.addMessage("Your last {{vars.chosenRestaurant}} rating was {{vars.lastRating}}", YOUR_RATING);
 
-            var fuse = new Fuse(user.restaurants, SEARCH_NAME_OPTIONS);
-            var results = fuse.search(restaurant);
-            var firstResult = results[0];
-
-            if (firstResult && firstResult.score === 0) {
-                var lastRating =  _.last(firstResult.item.ratings);
-                convo.setVar(VAR_LAST_RATING, starString(lastRating));
-                convo.gotoThread(YOUR_RATING);
-            } else if (results.length > 0) {
-                // Set newRestaurant var
-                convo.setVar(VAR_NEW_RESTAURANT, restaurant);
-                convo.setVar(VAR_FUSE_RESULTS, results);
-
-                // Create matches string and set to vars
-                var names = _.map(results, 'item.name');
-                var matches = names.map(function (el) {
-                    return "* " + el;
-                }).join("\n");
-                convo.setVar('matches', matches);
-
-                // ask for clarification
-                convo.transitionTo(CLARIFY_RESTAURANT, "Hmmm...");
-            } else {
-                convo.gotoThread(NEVER_RATED);
-            }
+        clarifyRestaurantSetup(convo, CHOOSE_RESTAURANT, NEVER_RATED);
+        chooseRestaurantSetup(convo, YOUR_RATING, function (convo) {
+            var chosenRestaurant = convo.vars[VAR_CHOSEN_RESTAURANT];
+            // console.log("======" + JSON.stringify(chosenRestaurant));
+            var ratingObject = _.find(allUserRatings, ["restaurant.name", chosenRestaurant]);
+            // console.log("======" + JSON.stringify(ratingObject));
+            var lastRating =  _.last(ratingObject.ratings);
+            convo.setVar(VAR_LAST_RATING, starString(lastRating));
         });
-    });
+
+        var fuse = new Fuse(allUserRatings, SEARCH_NAME_OPTIONS);
+        var results = fuse.search(restaurant);
+        console.log("=========results=" + JSON.stringify(results));
+        var firstResult = results[0];
+
+        if (firstResult && firstResult.score === 0) {
+            var lastRating =  _.last(firstResult.item.ratings);
+            convo.setVar(VAR_LAST_RATING, starString(lastRating));
+            convo.gotoThread(YOUR_RATING);
+        } else if (results.length > 0) {
+            // Set newRestaurant var
+            convo.setVar(VAR_NEW_RESTAURANT, restaurant);
+            var restaurantNames = _.map(results, "item.restaurant.name");
+            convo.setVar(VAR_FUSE_RESULTS, restaurantNames);
+
+            // Create matches string and set to vars
+            var matches = restaurantNames.map(el => "* " + el).join("\n");
+            convo.setVar('matches', matches);
+
+            // ask for clarification
+            convo.transitionTo(CLARIFY_RESTAURANT, "Hmmm...");
+        } else {
+            convo.gotoThread(NEVER_RATED);
+        }
+    }).catch(e => fatalError(message, e, "Couldn't retrieve ratings"));
 });
 controller.hears("^test$",'ambient,direct_message,direct_mention,mention', function(bot, message) {
     bot.reply(message, sanitizeName("test &amp; test"));
@@ -524,11 +499,11 @@ controller.hears("^lunch club(?:.s)? (.+) (?:(?:ratings?)|(?:stars))$",'ambient,
                     var userRatings = _.filter(userRatings, Boolean);
 
                     // Create a string that shows the user - rating
-                    var allUserRatingsString = _.reduce(userRatings, function(string, userRating) {
+                    var allUserRatings = _.reduce(userRatings, function(string, userRating) {
                         return string += "* " + _.padEnd(userRating.username, 10) + " - " + starString(userRating.rating) + "\n";
                     }, "");
 
-                    convo.setVar(VAR_USER_RATINGS, allUserRatingsString);
+                    convo.setVar(VAR_USER_RATINGS, allUserRatings);
 
                     // Calculate the average
                     var ratings = [];
@@ -613,7 +588,7 @@ controller.hears('^([0-9](?:\.[0-9])?) stars? for (.+)$','ambient,direct_message
         return;
     }
 
-    var convoCallback = function(team, user) {
+    var convoCallback = function(team, user, allRestaurants) {
         bot.createConversation(message, function(err, convo) {
             // Set conversation variables
             convo.setVar(VAR_TEAM, team);
@@ -625,7 +600,7 @@ controller.hears('^([0-9](?:\.[0-9])?) stars? for (.+)$','ambient,direct_message
             clarifyRestaurantSetup(convo, CHOOSE_RESTAURANT, NEW_RESTAURANT);
             chooseRestaurantSetup(convo, RATE_RESTAURANT, rateRestaurantSetup);
 
-            var fuse = new Fuse(team.restaurants, SEARCH_NAME_OPTIONS);
+            var fuse = new Fuse(allRestaurants, SEARCH_NAME_OPTIONS);
             var results = fuse.search(restaurant);
             // bot.reply(message,"results: " + JSON.stringify(results));
             var firstResult = results[0];
@@ -654,7 +629,6 @@ controller.hears('^([0-9](?:\.[0-9])?) stars? for (.+)$','ambient,direct_message
                 convo.transitionTo(CLARIFY_RESTAURANT, "Hmmm...");
             } else {
                 // Add new restaurant
-                team.restaurants.push(new Restaurant(restaurant));
                 convo.setVar(VAR_CHOSEN_RESTAURANT, restaurant);
 
                 // Rate restaurant
@@ -675,23 +649,27 @@ controller.hears('^([0-9](?:\.[0-9])?) stars? for (.+)$','ambient,direct_message
     }
 
     // Retrieve the team
-    controller.storage.teams.get(message.team, function(err, team) {
-        team = createTeam(message, team);
+    Promise.join(
+        controller.storage.restaurants.allAsync(),
+        controller.storage.teams.getAsync(message.team),
+        controller.storage.users.getAsync(message.user),
+        (allRestaurants, team, user) => {
 
-        // Retrieve the user 
-        controller.storage.users.get(message.user, function(err, user) {
+            team = createTeam(message, team);
             user = createUser(message, user);
 
             if (!user.name) {
-                askNameConvo(message, user, function (convo) {
-                    convo.addMessage("Who calls themselves, {{vars.user.name}}? Anyway, moving along...", ASK_NAME);
-                    var savedUser = convo.vars[VAR_USER];
-                    convoCallback(team, savedUser);
+                askNameConvo(message, user).then(user => {
+                    if (user.name) {
+                        bot.reply(message, "Who calls themselves, " + user.name + "? Anyway, moving along...")
+                        convoCallback(team, user, allRestaurants); 
+                    } else {
+                        bot.reply(message, "No rating for you!! :rage:")
+                    }               
                 });
             } else {
-                convoCallback(team, user);
+                convoCallback(team, user, allRestaurants);
             }
-        });
     });
 });
 
@@ -700,8 +678,9 @@ controller.hears('^do you like me','direct_message,direct_mention,mention', func
         if (user && user.name) {
             bot.reply(message, 'No, ' + user.name + '. No one likes you. You don\'t shower and you reek of a rotten ' + randFruit());
         } else {
-            askNameConvo(message, user, function (convo) {
-                convo.addMessage('Now that I know your name, no, I don\'t like you and "{{vars.user.name}}" is an ugly name and your face looks like a ' + randFruit(), ASK_NAME);
+            askNameConvo(message, user).then(user => {
+                if (user.name) 
+                    bot.reply(message, "Now that I know your name, no, I don't like you and " + user.name + " is an ugly name and your face looks like a " + randFruit());
             });
         }
     });
@@ -843,8 +822,9 @@ controller.hears(['^what is my name', '^who am i'], 'direct_message,direct_menti
         if (user && user.name) {
             bot.reply(message, 'Your name is ' + user.name);
         } else {
-            askNameConvo(message, user, function (convo) {
-                convo.addMessage("Alright, {{vars.user.name}}, run along now.", ASK_NAME);
+            askNameConvo(message, user).then(user => {
+                if (user.name)
+                    bot.reply(message, "Alright, " + user.name + " run along now.")
             });
         }
     });
