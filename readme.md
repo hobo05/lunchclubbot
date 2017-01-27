@@ -67,3 +67,9 @@ Used the [botkit framework](https://github.com/howdyai/botkit) to create a [Slac
 SLACK_TOKEN=abctoken
 MONGODB_URL=mongodb://testuser:password@test.com/testdb
 ```
+
+## TODO
+* Remove extra files cloned from <https://github.com/howdyai/botkit>
+* Refactor code to use Promises for everything async
+* Command for top 10 rated restaurants (by team average and by user)
+* Restaurant wishlist
