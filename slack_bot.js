@@ -366,7 +366,7 @@ controller.hears('^help$','ambient,direct_message,direct_mention,mention', funct
         '',
         '*help*',
         '*hello*',
-        '*(stars) for (place)*',
+        '*(stars) stars for (place)*',
         '*my (place) rating*',
         '*lunch club (place) ratings*',
         '*search (place) in (location)*',
