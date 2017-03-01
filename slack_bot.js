@@ -385,9 +385,9 @@ controller.hears('^help$','ambient,direct_message,direct_mention,mention', funct
         ].join('\n - ')]));
 });
 
-controller.hears('^((screw|fuck|hate) you)|([a-z]+ off)|(go [a-z]+ yourself)','direct_message,direct_mention,mention', function(bot, message) {
+controller.hears('((damn|screw|fuck|hate) you)|([a-z]+ off)|(go [a-z]+ yourself)','direct_message,direct_mention,mention', function(bot, message) {
     bot.reply(message, randResponse([
-        'You\'re the biggest mistake my mom and I ever made.',
+        'You\'re the biggest mistake your mom and I ever made.',
         'Whaa, whaa, whaa, "' + message.text + '". Why don\'t you grow a :pear:?',
         'Did it take you all day to come up with that?'
         ]));
