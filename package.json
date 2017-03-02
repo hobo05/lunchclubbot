@@ -34,12 +34,14 @@
   "devDependencies": {
     "jscs": "^2.7.0",
     "mocha": "^2.4.5",
+    "nodemon": "^1.11.0",
     "should": "^8.0.2",
     "unit.js": "^2.0.0",
     "winston": "^2.1.1"
   },
   "scripts": {
-    "start": "node slack_bot.js",
+    "start": "node slack_bot",
+    "local-dev": "nodemon slack_bot",
     "pretest": "jscs ./lib/",
     "test": "mocha tests/*.js"
   },

@@ -127,7 +127,7 @@ const RATE_RESTAURANT = 'rate_restaurant';
 Start - ASK_NAME
 ***********************/
 
-var askName = function(convo, callback) {
+var askName = function(convo) {
     convo.addMessage('I do not know your name yet!', ASK_NAME);
     convo.addQuestion('What should I call you?', function(response, convo) {
         var name = response.text;
@@ -173,7 +173,7 @@ var askNameConvo = function(message, user) {
         askName(convo);
         convo.gotoThread(ASK_NAME);
 
-        var convoEndPromise = new Promise(function (resolve, reject) {
+        var userPromise = new Promise(function (resolve, reject) {
             convo.on("end", function (convo) {
                 if (convo.status === "completed") {
                     user.name = convo.extractResponse("username");
@@ -187,7 +187,7 @@ var askNameConvo = function(message, user) {
 
         convo.activate();
 
-        return convoEndPromise;
+        return userPromise;
     });
 }
 
@@ -405,13 +405,36 @@ controller.hears('^tell (?:[a-z]+) (.+)','direct_message,direct_mention,mention'
 controller.hears('^my (.+) (?:(?:ratings?)|(?:stars))$','ambient,direct_message,direct_mention,mention', function(bot, message) {
     var restaurant = sanitizeName(message.match[1]);
 
-    var userPromise = controller.storage.users.getAsync(message.user);
-    var allUserRatingsPromise = userPromise.then(user => controller.storage.restaurantRatings.getByUserIdAsync(user.id));
-    var convoPromise = bot.startConversationAsync(message);
-
-    Promise.join(userPromise, allUserRatingsPromise, convoPromise, (user, allUserRatings, convo) => {
-
+    // Ask for user's name if it doesn't exist
+    controller.storage.users.getAsync(message.user).bind({})
+    .then(user => {
         user = createUser(message, user);
+        if (!user.name) {
+            return askNameConvo(message, user);
+        }
+        return undefined;
+    }).then(user => {
+        // retrieve user restaurant ratings if the user has a name
+        if (user.name) {
+            this.user = user;
+            return controller.storage.restaurantRatings.getByUserIdAsync(user.id);
+        }
+    }).then(allUserRatings => {
+        // Create a conversation if the ratings exist
+        if (allUserRatings) {
+            this.allUserRatings = allUserRatings;
+            return bot.startConversationAsync(message);
+        }
+    }).then(convo => {
+
+        // Make sure all variables are set, otherwise exit
+        // console.log(`==========this.user=${this.user}, this.allUserRatings=${this.allUserRatings}, this.convo=${this.convo}`);
+        let user = this.user;
+        let allUserRatings = this.allUserRatings;
+        if (!user || !allUserRatings || !convo) {
+            return;
+        }
+
         convo.setVar(VAR_CHOSEN_RESTAURANT, restaurant);
 
         const NEVER_RATED = "never_rated";
@@ -818,7 +841,8 @@ controller.hears(['^call me (.*)', '^my name is (.*)'], 'direct_message,direct_m
 
 controller.hears(['^what is my name', '^who am i'], 'direct_message,direct_mention,mention', function(bot, message) {
 
-    controller.storage.users.get(message.user, function(err, user) {
+    controller.storage.users.getAsync(message.user)
+    .then(user => {
         if (user && user.name) {
             bot.reply(message, 'Your name is ' + user.name);
         } else {
@@ -827,7 +851,7 @@ controller.hears(['^what is my name', '^who am i'], 'direct_message,direct_menti
                     bot.reply(message, "Alright, " + user.name + " run along now.")
             });
         }
-    });
+    }).catch(e => fatalError(message, e, "Couldn't retrieve your name"));
 });
 
 
