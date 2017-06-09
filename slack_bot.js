@@ -385,7 +385,7 @@ controller.hears('^help$','ambient,direct_message,direct_mention,mention', funct
         ].join('\n - ')]));
 });
 
-controller.hears('^submit ([0-9])+ votes for ([a-z])+$','ambient,direct_message,direct_mention,mention', function(bot, message) {
+controller.hears('^submit ([0-9]+) votes for ([a-z]+)$','ambient,direct_message,direct_mention,mention', function(bot, message) {
     var votes = Number(message.match[1]);
     var name = message.match[2];
     for (let i = 0; i < votes; i++) {
