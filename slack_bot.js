@@ -389,7 +389,7 @@ controller.hears('^submit ([0-9]+) votes for (.+)$','ambient,direct_message,dire
     var votes = Number(message.match[1]);
     var name = message.match[2];
     for (let i = 0; i < votes; i++) {
-        bot.reply(message, `Submitting vote # ${i} for ${name}`);    
+        bot.reply(message, `Submitting vote # ${i} as ${randFruit()}_face_${i} for ${name}`);    
     }
     
 });
